@@ -7,6 +7,7 @@ import platform
 import ssl
 
 from aiohttp import web
+from multidict import MultiDict
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaPlayer, MediaRelay
@@ -53,6 +54,14 @@ async def javascript(request):
     content = open(os.path.join(ROOT, "client.js"), "r").read()
     return web.Response(content_type="application/javascript", text=content)
 
+async def offer_options(request):
+    return web.Response(
+        headers=MultiDict({
+            'Access-Control-Allow-Origin': "*",
+            'Access-Control-Allow-Methods': "POST",
+            'Access-Control-Allow-Headers': "*",
+        }),
+    )
 
 async def offer(request):
     params = await request.json()
@@ -89,6 +98,11 @@ async def offer(request):
     await pc.setLocalDescription(answer)
 
     return web.Response(
+        headers=MultiDict({
+            'Access-Control-Allow-Origin': "*",
+            'Access-Control-Allow-Methods': "POST",
+            'Access-Control-Allow-Headers': "*",
+        }),
         content_type="application/json",
         text=json.dumps(
             {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
@@ -144,4 +158,5 @@ if __name__ == "__main__":
     app.router.add_get("/", index)
     app.router.add_get("/client.js", javascript)
     app.router.add_post("/offer", offer)
+    app.router.add_options("/offer", offer_options)
     web.run_app(app, host=args.host, port=args.port, ssl_context=ssl_context)
