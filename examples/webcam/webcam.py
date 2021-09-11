@@ -14,10 +14,14 @@ from aiortc.contrib.media import MediaPlayer, MediaRelay
 from aiortc.rtcrtpsender import RTCRtpSender
 
 ROOT = os.path.dirname(__file__)
-
+# Max number of connections allowed. When this number is exceeded,
+# new client connections will force old clients to close
+MAX_CONNECTIONS = 5
 
 relay = None
 webcam = None
+# Storage for RTCPeerConnections
+pcs = []
 
 
 def create_local_tracks(play_from, transcode=True, options=None):
@@ -68,14 +72,22 @@ async def offer(request):
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
 
     pc = RTCPeerConnection()
-    pcs.add(pc)
+    pcs.append(pc)
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        print("Connection state is %s" % pc.connectionState)
+        logging.info("Connection state is %s" % pc.connectionState)
         if pc.connectionState == "failed":
             await pc.close()
-            pcs.discard(pc)
+            # May have already been removed if it was force-disconnected
+            if pc in pcs:
+                pcs.remove(pc)
+        elif pc.connectionState == 'connected':
+            # Disconnect old clients if we're at our limit
+            if (len(pcs) > MAX_CONNECTIONS):
+                old_pc = pcs.pop(0)
+                logging.warning(f"Force-disconnecting old client {old_pc}")
+                await old_pc.close()
 
     # open media source
     audio, video = create_local_tracks(args.play_from, transcode=args.transcode, options=args.video_options)
@@ -108,9 +120,6 @@ async def offer(request):
             {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
         ),
     )
-
-
-pcs = set()
 
 
 async def on_shutdown(app):
