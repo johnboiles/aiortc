@@ -38,7 +38,7 @@ async def snapshot_worker(main_loop: asyncio.BaseEventLoop, quit: threading.Even
 
         # This requires a hack to not packetize in media.py:263 so that it sends back packets
         # and not just bytes
-        packet, _ = await player.video.recv()
+        packet = await player.video.recv_packet()
         if packet.is_keyframe:
             print(packet)
             frames = packet.decode()
