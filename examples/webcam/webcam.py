@@ -1,5 +1,8 @@
 import argparse
 import asyncio
+
+from aiohttp.web_request import Request
+from snapshotter import Snapshotter
 import json
 import logging
 import os
@@ -22,6 +25,7 @@ relay = None
 webcam = None
 # Storage for RTCPeerConnections
 pcs = []
+snapshotter: Snapshotter
 
 
 def create_local_tracks(play_from, transcode=True, options=None):
@@ -49,12 +53,12 @@ def create_local_tracks(play_from, transcode=True, options=None):
         return None, relay.subscribe(webcam.video)
 
 
-async def index(request):
+async def webrtc_player(request):
     content = open(os.path.join(ROOT, "index.html"), "r").read()
     return web.Response(content_type="text/html", text=content)
 
 
-async def javascript(request):
+async def webrtc_javascript(request):
     content = open(os.path.join(ROOT, "client.js"), "r").read()
     return web.Response(content_type="application/javascript", text=content)
 
@@ -122,11 +126,22 @@ async def offer(request):
     )
 
 
+async def webcam_compat(request: Request):
+    if request.query.get("action") == "stream":
+        return await snapshotter.mjpeg_http_route(request)
+    else:
+        return await snapshotter.jpeg_http_route(request)
+
+
 async def on_shutdown(app):
     # close peer connections
     coros = [pc.close() for pc in pcs]
     await asyncio.gather(*coros)
     pcs.clear()
+    tasks = asyncio.all_tasks()
+    for _task in tasks:
+        _task.cancel()
+    snapshotter.stop()
 
 
 if __name__ == "__main__":
@@ -162,10 +177,16 @@ if __name__ == "__main__":
     else:
         ssl_context = None
 
+    # Create mjpeg snapshotter
+    _, video = create_local_tracks(args.play_from, transcode=args.transcode, options=args.video_options)
+    snapshotter = Snapshotter(video)
+    snapshotter.start()
+
     app = web.Application()
     app.on_shutdown.append(on_shutdown)
-    app.router.add_get("/", index)
-    app.router.add_get("/client.js", javascript)
+    app.router.add_get("/webrtc", webrtc_player)
+    app.router.add_get("/client.js", webrtc_javascript)
     app.router.add_post("/offer", offer)
     app.router.add_options("/offer", offer_options)
+    app.router.add_get("/", webcam_compat)
     web.run_app(app, host=args.host, port=args.port, ssl_context=ssl_context)
