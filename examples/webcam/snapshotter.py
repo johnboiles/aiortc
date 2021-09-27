@@ -7,7 +7,7 @@ import PIL.Image
 from av.frame import Frame
 from av.packet import Packet
 
-from aiohttp import web, MultipartWriter
+from aiohttp import web
 
 from aiortc.mediastreams import MediaStreamTrack
 
@@ -99,33 +99,37 @@ class Snapshotter:
         self.thread_quit.set()
 
     async def mjpeg_http_route(self, request: web.Request):
-        my_boundary = "jpeg-frame-boundary"
+        boundary = "jpeg-frame-boundary"
         response = web.StreamResponse(
             status=200,
             reason="OK",
             headers={
-                "Content-Type": "multipart/x-mixed-replace;boundary={}".format(
-                    my_boundary
-                )
+                "Content-Type": "multipart/x-mixed-replace;boundary={}".format(boundary)
             },
         )
         await response.prepare(request)
         frames_sent = 0
         while True:
-            # For the first frame just send whatever we have, for subsequent frames
-            # wait for the future.
-            jpeg_frame = await self.get_jpeg(await_latest=(frames_sent != 0))
+            # Send the first two frames in quick succession so that you get something rendering on first request.
+            # For some reason, Chrome and Safari don't render the frame as soon as its sent, but instead only
+            # render the previous frame once the next frame is sent.
+            # https://bugs.chromium.org/p/chromium/issues/detail?id=527446
+            jpeg_frame = await self.get_jpeg(await_latest=(frames_sent > 1))
+            img_byte_arr = io.BytesIO()
+            jpeg_frame.save(img_byte_arr, format="JPEG")
+            if frames_sent == 0:
+                await response.write(b"--" + bytes(boundary, "ascii") + b"\r\n")
+            await response.write(
+                b"Content-Type: image/jpeg\r\nContent-Length: "
+                + bytes(str(img_byte_arr.tell()), "ascii")
+                + b"\r\n\r\n"
+            )
+            await response.write(img_byte_arr.getvalue())
+            # Firefox will re-render the image as soon as it sees the next boundary, so always providing the next
+            # boundary here right after sending the image data will at least make Firefox have better
+            # mjpeg latency. Unfortunately this doesn't work for Chrome and Safari :(
+            await response.write(b"\r\n\r\n--" + bytes(boundary, "ascii") + b"\r\n")
             frames_sent += 1
-            with MultipartWriter("image/jpeg", boundary=my_boundary) as mpwriter:
-                img_byte_arr = io.BytesIO()
-                jpeg_frame.save(img_byte_arr, format="JPEG")
-                mpwriter.append(img_byte_arr.getvalue(), {"Content-Type": "image/jpeg"})
-                await mpwriter.write(response, close_boundary=False)
-            # This line logs:
-            #   DeprecationWarning: drain method is deprecated, use await resp.write()
-            # If I remove this it seems that the first frame is incomplete however.
-            # TODO: figure out the blessed approach here
-            await response.drain()
 
     async def jpeg_http_route(self, req: web.Request):
         jpeg_frame = await self.get_jpeg(await_latest=False)
