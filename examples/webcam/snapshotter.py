@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import io
+import logging
 import PIL.Image
 
 from av.frame import Frame
@@ -23,8 +24,18 @@ class Snapshotter:
 
     def set_jpeg(self, image: PIL.Image):
         self.last_jpeg = image
-        self.jpeg_future.set_result(image)
-        self.jpeg_future = asyncio.Future()
+        # I'm not totally sure how it happened, but at one point I got into
+        # a state where the `jpeg_future` was invalid and this line would crash.
+        # We should make sure we can recover by creating a new future if necessary.
+        try:
+            self.jpeg_future.set_result(image)
+        except asyncio.base_futures.InvalidStateError:
+            logging.warn(
+                "Got InvalidStateError on self.jpeg_future.set_result(image)",
+                self.jpeg_future,
+            )
+        finally:
+            self.jpeg_future = asyncio.Future()
 
     async def get_jpeg(self, await_latest=True) -> PIL.Image:
         if await_latest or self.last_jpeg is None:
